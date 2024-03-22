@@ -25,7 +25,9 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include "pid.h"
+#include "R1CANIDList.h"
 #include "DJI_CANIDList.h"
+#include "ErrorCode.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -104,6 +106,7 @@ static void MX_FDCAN1_Init(void);
 /* USER CODE BEGIN PFP */
 static void ARM_Position_PID_Init(void);
 static void ARM_Position_PID_Cycle(void);
+static void write_error_message(uint8_t error_code);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -162,7 +165,7 @@ static void ARM_Position_PID_Init(void) {
 
 	PID_For_ARM_POS = (struct PID *)malloc(4 * sizeof(struct PID));
 	if (PID_For_ARM_POS == NULL) {
-			printf("error: cannot allocate sequence"); // TODO : send error code to raspberrypi
+	    write_error_message(MEMORY_ERROR);
 			Error_Handler();
 	}
 
@@ -184,7 +187,7 @@ static void ARM_Position_PID_Init(void) {
 static void ARM_Position_PID_Cycle(void) {
 	// Automatically set adc value to DMA, so don't need to read ADC
 	if (PID_For_ARM_POS == NULL) {
-			printf("error: not initialized PID_For_ARM_POS"); // TODO : send error code to raspberrypi
+	    write_error_message(NULL_POINTER_ERROR);
 			Error_Handler();
 	}
 
@@ -201,8 +204,23 @@ static void ARM_Position_PID_Cycle(void) {
 	// write new controller value with can
 	FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
 	if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, pid_controller_value) != HAL_OK) {
-					Error_Handler();
+	    write_error_message(FDCAN3_ERROR);
+	    Error_Handler();
 	}
+}
+
+// send error message to raspberrypi
+static void write_error_message(uint8_t error_code) {
+  /*
+   * LSB ----------------- MSB
+   * | micon ID | error_code |
+   */
+  uint8_t error_data = (error_code << 4) | ArmWheelController;
+  FDCAN1_TxHeader.Identifier = CANID_RUNTIME_ERROR;
+  FDCAN1_TxHeader.DataLength = FDCAN_DLC_BYTES_1;
+  if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &FDCAN1_TxHeader, &error_data) != HAL_OK) {
+          Error_Handler();
+  }
 }
 
 int _write(int file, char *ptr, int len)
@@ -265,12 +283,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    uint8_t pid_controller_value[1] = {0};
-    FDCAN1_TxHeader.Identifier = DJI_CANID_TX0;
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &FDCAN1_TxHeader, pid_controller_value) != HAL_OK) {
-            Error_Handler();
-    }
-    HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

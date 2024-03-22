@@ -65,10 +65,17 @@ uint16_t arm_positions[4] = {0};
 // For ARM position PID
 struct PID *PID_For_ARM_POS = NULL;
 
-// PID Parameters
-double P_GAIN_FOR_ARM_POS = 9;
+/*
+ * PID Parameters
+ * 限界感度法で調節
+ * kpc = 62 (持続振動をするときのPゲインの大きさ)
+ * T_c = 0.33 (持続振動の周波数が3Hzだった)
+ *
+ * -> 限界感度法がクソなのでいい感じにした
+ */
+double P_GAIN_FOR_ARM_POS = 0.2 * 62;
 double I_GAIN_FOR_ARM_POS = 0;
-double D_GAIN_FOR_ARM_POS = 0;
+double D_GAIN_FOR_ARM_POS = 0.5;
 
 // setpoint for arm
 // TODO

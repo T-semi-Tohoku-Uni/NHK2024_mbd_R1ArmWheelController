@@ -70,6 +70,15 @@ double P_GAIN_FOR_ARM_POS = 9;
 double I_GAIN_FOR_ARM_POS = 0;
 double D_GAIN_FOR_ARM_POS = 0;
 
+// setpoint for arm
+// TODO
+int setpoint[4] = {
+		1900,
+		1900,
+		1900,
+		1900
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/

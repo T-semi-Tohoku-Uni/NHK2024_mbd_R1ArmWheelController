@@ -1,0 +1,3 @@
+../Core/NHK2024_Library/src/clip_number.c:3:5:clip_int_number	3
+../Core/NHK2024_Library/src/clip_number.c:13:8:clip_double_number	3
+../Core/NHK2024_Library/src/clip_number.c:23:8:clip_zero_one	3

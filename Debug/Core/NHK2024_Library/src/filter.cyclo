@@ -1,0 +1,4 @@
+../Core/NHK2024_Library/src/filter.c:3:24:moving_average_filter_init	2
+../Core/NHK2024_Library/src/filter.c:16:8:moving_average_filter_update	3
+../Core/NHK2024_Library/src/filter.c:32:27:low_pass_filter_init	1
+../Core/NHK2024_Library/src/filter.c:44:8:low_pass_filter_update	1

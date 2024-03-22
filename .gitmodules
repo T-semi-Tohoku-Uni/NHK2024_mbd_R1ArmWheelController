@@ -1,0 +1,6 @@
+[submodule "Core/NHK2024_Library"]
+	path = Core/NHK2024_Library
+	url = git@github.com:T-semi-Tohoku-Uni/NHK2024_Library.git
+[submodule "Core/NHK2024_R1CANIDList"]
+	path = Core/NHK2024_R1CANIDList
+	url = git@github.com:T-semi-Tohoku-Uni/NHK2024_R1CANIDList.git

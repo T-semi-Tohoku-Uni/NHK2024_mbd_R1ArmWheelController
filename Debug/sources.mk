@@ -22,6 +22,8 @@ C_DEPS :=
 
 # Every subdirectory with source files must be described here
 SUBDIRS := \
+Core/NHK2024_Library/src \
+Core/NHK2024_Library/test \
 Core/Src \
 Core/Startup \
 Drivers/STM32G4xx_HAL_Driver/Src \

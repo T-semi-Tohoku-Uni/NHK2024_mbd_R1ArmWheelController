@@ -23,6 +23,9 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <inttypes.h>
+#include <stdlib.h>
+#include "pid.h"
+#include "DJI_CANIDList.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +51,8 @@ FDCAN_HandleTypeDef hfdcan3;
 
 UART_HandleTypeDef hlpuart1;
 
+TIM_HandleTypeDef htim6;
+
 /* USER CODE BEGIN PV */
 
 // CAN settings
@@ -56,6 +61,14 @@ FDCAN_RxHeaderTypeDef FDCAN3_RxHeader;
 
 // For ADC continuous read
 uint16_t arm_positions[4] = {0};
+
+// For ARM position PID
+struct PID *PID_For_ARM_POS = NULL;
+
+// PID Parameters
+double P_GAIN_FOR_ARM_POS = 9;
+double I_GAIN_FOR_ARM_POS = 0;
+double D_GAIN_FOR_ARM_POS = 0;
 
 /* USER CODE END PV */
 
@@ -66,18 +79,31 @@ static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_FDCAN3_Init(void);
+static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void ARM_Position_PID_Init(void);
+static void ARM_Position_PID_Cycle(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// Set Interrupt Handler
+// Set timer interrupt
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
+
+	// For arm position adc
+	if (htim == &htim6) {
+			printf("%d\r\n", arm_positions[1]);
+			ARM_Position_PID_Cycle();
+	}
+
+}
+
+// Set Interrupt Handler For FDCAN3
 void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs) {
 	uint8_t FDCAN3_RxData[8];
 	// Error Handling
-	printf("FIFO1 callback\r\n");
+//	printf("FIFO1 callback\r\n");
 	if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE) == RESET) return;
 	if (hfdcan != &hfdcan3) return;
 
@@ -86,9 +112,59 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 		Error_Handler();
 	}
 
-	switch(FDCAN3_RxHeader.Identifier) {
-		default:
-			printf("CAN ID %" PRIu32 "is not cached from FIFO1 callback\r\n", FDCAN3_RxHeader.Identifier);
+	// TODO : Add wheel controller
+//	switch(FDCAN3_RxHeader.Identifier) {
+//		default:
+//			printf("CAN ID %" PRIu32 "is not cached from FIFO1 callback\r\n", FDCAN3_RxHeader.Identifier);
+//	}
+}
+
+
+/* For ARM PID */
+static void ARM_Position_PID_Init(void) {
+
+	PID_For_ARM_POS = (struct PID *)malloc(4 * sizeof(struct PID));
+	if (PID_For_ARM_POS == NULL) {
+			printf("error: cannot allocate sequence"); // TODO : send error code to raspberrypi
+			Error_Handler();
+	}
+
+	// initialize element
+	for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+			/*
+			 * 制御周期 : 1000Hz
+			 * kp : 1
+			 * kd : 0
+			 * ki : 0
+			 * setpoint : 1500
+			 * -500 : integral_min
+			 * 500: integral_max
+			 */
+			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS, D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, 1900, -500, 500);
+	}
+}
+
+static void ARM_Position_PID_Cycle(void) {
+	// Automatically set adc value to DMA, so don't need to read ADC
+	if (PID_For_ARM_POS == NULL) {
+			printf("error: not initialized PID_For_ARM_POS"); // TODO : send error code to raspberrypi
+			Error_Handler();
+	}
+
+
+	uint8_t pid_controller_value[8];
+
+	// update controller output
+	for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+			uint16_t pid_for_arm_output = (uint16_t)(-int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_positions[arm_index]));
+			pid_controller_value[arm_index*2] = pid_for_arm_output >> 8;
+			pid_controller_value[arm_index*2+1] = pid_for_arm_output & 0xFF;
+	}
+
+	// write new controller value with can
+	FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
+	if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, pid_controller_value) != HAL_OK) {
+					Error_Handler();
 	}
 }
 
@@ -132,13 +208,18 @@ int main(void)
   MX_ADC1_Init();
   MX_LPUART1_UART_Init();
   MX_FDCAN3_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
-
+  // Initialize PID library
+  ARM_Position_PID_Init();
   // Start ADC and save at DMA
 	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);
 
-  printf("Complete Initialize\r\n");
+	printf("Complete Initialize\r\n");
+
+	// Start timer interrupt (1kHz)
+	HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */
 
@@ -146,8 +227,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-  		printf("%d\r\n", arm_positions[0]);
-  		HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -415,6 +494,44 @@ static void MX_LPUART1_UART_Init(void)
   /* USER CODE BEGIN LPUART1_Init 2 */
 
   /* USER CODE END LPUART1_Init 2 */
+
+}
+
+/**
+  * @brief TIM6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM6_Init(void)
+{
+
+  /* USER CODE BEGIN TIM6_Init 0 */
+
+  /* USER CODE END TIM6_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM6_Init 1 */
+
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 80;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 999;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM6_Init 2 */
+
+  /* USER CODE END TIM6_Init 2 */
 
 }
 

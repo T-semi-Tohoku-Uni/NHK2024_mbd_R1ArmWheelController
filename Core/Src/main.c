@@ -125,7 +125,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
 // Set Interrupt Handler for FDCAN1 (raspberrypi, other stm ..)
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
-  uint8_t FDCAN1_RxData[8];
+  uint8_t FDCAN1_RxData[2] = {0};
 
   printf("FIFO0 callback\r\n");
 
@@ -136,6 +136,15 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
   if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &FDCAN1_RxHeader, FDCAN1_RxData) != HAL_OK) {
       printf("FDCAN3 error %" PRIu32 "\r\n", hfdcan->ErrorCode); // TODO : send this error to raspberrypi ON FDCAN1
       Error_Handler();
+  }
+
+  switch(FDCAN1_RxHeader.Identifier) {
+    case CANID_ARM1:
+      printf("CANID_ARM %d %d\r\n", FDCAN1_RxData[0]);
+      //TODO : Update ARM position setpoint
+      break;
+    default:
+      break;
   }
 }
 
@@ -275,7 +284,7 @@ int main(void)
 	printf("Complete Initialize\r\n");
 
 	// Start timer interrupt (1kHz)
-//	HAL_TIM_Base_Start_IT(&htim6);
+	HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */
 

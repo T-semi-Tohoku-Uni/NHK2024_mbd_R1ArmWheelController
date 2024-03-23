@@ -117,7 +117,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
 	// For arm position adc
 	if (htim == &htim6) {
-			printf("%d\r\n", arm_positions[1]);
+//			printf("%d\r\n", arm_positions[1]);
 			ARM_Position_PID_Cycle();
 	}
 
@@ -142,6 +142,29 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
     case CANID_ARM1:
       printf("CANID_ARM %d %d\r\n", FDCAN1_RxData[0]);
       //TODO : Update ARM position setpoint
+      switch(FDCAN1_RxData[0]) {
+        case 0:
+          printf("setpoint is %d\r\n", 2000); // TODO ; delete
+          for(int arm_index=0; arm_index < 4; arm_index++ ) {
+              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], 2000);
+          }
+          break;
+        case 1:
+          printf("setpoint is %d\r\n", 1900); // TODO : delete
+          for(int arm_index=0; arm_index < 4; arm_index++ ) {
+              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], 1900);
+          }
+          break;
+        case 2:
+          printf("setpoint is %d\r\n", 2100); // TODO : delete
+          for(int arm_index=0; arm_index < 4; arm_index++ ) {
+              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], 2100);
+          }
+          break;
+        default:
+          break; // TODO : send RuntimeError to raspbeerypi
+      }
+
       break;
     default:
       break;

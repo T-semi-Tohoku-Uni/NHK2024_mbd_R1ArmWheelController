@@ -85,11 +85,29 @@ double D_GAIN_FOR_ARM_POS = 0.5;
 
 // setpoint for arm
 // TODO
-int setpoint[4] = {
-		1900,
-		1900,
-		1900,
-		1900
+//int setpoint[4] = {
+//		2640,
+//		1550,
+//		2480,
+//		1387,
+//};
+int setpoint[3][4] = {
+    {
+        2640,
+        1550,
+        2480,
+        1387,
+    }, {
+        2022,
+        1550,
+        2480,
+        2050
+    }, {
+        2635,
+        2184,
+        1850,
+        1382
+    }
 };
 
 /* USER CODE END PV */
@@ -117,7 +135,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
 	// For arm position adc
 	if (htim == &htim6) {
-//			printf("%d\r\n", arm_positions[1]);
 			ARM_Position_PID_Cycle();
 	}
 
@@ -126,8 +143,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 // Set Interrupt Handler for FDCAN1 (raspberrypi, other stm ..)
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
   uint8_t FDCAN1_RxData[2] = {0};
-
-  printf("FIFO0 callback\r\n");
 
   // Error Handling
   if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == RESET) return;
@@ -138,36 +153,31 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
       Error_Handler();
   }
 
-  switch(FDCAN1_RxHeader.Identifier) {
-    case CANID_ARM1:
-      printf("CANID_ARM %d %d\r\n", FDCAN1_RxData[0]);
-      //TODO : Update ARM position setpoint
+  uint32_t recived_can_id = FDCAN1_RxHeader.Identifier;
+
+  if (recived_can_id == CANID_ARM1) {
       switch(FDCAN1_RxData[0]) {
         case 0:
-          printf("setpoint is %d\r\n", 2000); // TODO ; delete
+          printf("PICKUP\r\n");
           for(int arm_index=0; arm_index < 4; arm_index++ ) {
-              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], 2000);
+              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], setpoint[0][arm_index]);
           }
           break;
         case 1:
-          printf("setpoint is %d\r\n", 1900); // TODO : delete
+          printf("PUT INSIDE\r\n");
           for(int arm_index=0; arm_index < 4; arm_index++ ) {
-              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], 1900);
+              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], setpoint[1][arm_index]);
           }
           break;
         case 2:
-          printf("setpoint is %d\r\n", 2100); // TODO : delete
+          printf("PUT OUTSIDE\r\n");
           for(int arm_index=0; arm_index < 4; arm_index++ ) {
-              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], 2100);
+              pid_reset_setpoint(&PID_For_ARM_POS[arm_index], setpoint[2][arm_index]);
           }
           break;
         default:
           break; // TODO : send RuntimeError to raspbeerypi
       }
-
-      break;
-    default:
-      break;
   }
 }
 
@@ -212,7 +222,7 @@ static void ARM_Position_PID_Init(void) {
 			 * -500 : integral_min
 			 * 500: integral_max
 			 */
-			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS, D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, 1900, -500, 500);
+			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS, D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, setpoint[2][arm_index], -500, 500);
 	}
 }
 
@@ -226,14 +236,25 @@ static void ARM_Position_PID_Cycle(void) {
 
 	uint8_t pid_controller_value[8];
 
+//	printf("0, %d, %d, %d, %d, 3000\r\n", arm_positions[0], arm_positions[1], arm_positions[2], arm_positions[3]);
+//	printf("0, %d, 3000\r\n", arm_positions[2]);
+
+//	uint16_t arm[4] = {
+//	    arm_positions[3],
+//	    arm_positions[0],
+//	    arm_positions[1],
+//	    arm_positions[2]
+//	};
+
 	// update controller output
 	for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+
 			uint16_t pid_for_arm_output = (uint16_t)(-int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_positions[arm_index]));
 			pid_controller_value[arm_index*2] = pid_for_arm_output >> 8;
 			pid_controller_value[arm_index*2+1] = pid_for_arm_output & 0xFF;
 	}
 
-	// write new controller value with can
+////	 write new controller value with can
 	FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
 	if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, pid_controller_value) != HAL_OK) {
 	    write_error_message(FDCAN3_ERROR);
@@ -420,7 +441,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Channel = ADC_CHANNEL_7;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
@@ -433,7 +454,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = ADC_REGULAR_RANK_2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
@@ -442,7 +463,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_6;
+  sConfig.Channel = ADC_CHANNEL_2;
   sConfig.Rank = ADC_REGULAR_RANK_3;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
@@ -451,7 +472,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_7;
+  sConfig.Channel = ADC_CHANNEL_6;
   sConfig.Rank = ADC_REGULAR_RANK_4;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
@@ -721,12 +742,19 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 /* USER CODE BEGIN MX_GPIO_Init_1 */
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  /*Configure GPIO pins : PA6 PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */

@@ -79,7 +79,7 @@ struct PID *PID_For_ARM_POS = NULL;
  *
  * -> 限界感度法がクソなのでいい感じにした
  */
-double P_GAIN_FOR_ARM_POS = 0.2 * 62;
+double P_GAIN_FOR_ARM_POS = 4;
 double I_GAIN_FOR_ARM_POS = 0;
 double D_GAIN_FOR_ARM_POS = 0.5;
 
@@ -124,7 +124,6 @@ static void MX_FDCAN1_Init(void);
 /* USER CODE BEGIN PFP */
 static void ARM_Position_PID_Init(void);
 static void ARM_Position_PID_Cycle(void);
-static void write_error_message(uint8_t error_code);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -153,9 +152,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
       Error_Handler();
   }
 
-  uint32_t recived_can_id = FDCAN1_RxHeader.Identifier;
-
-  if (recived_can_id == CANID_ARM1) {
+  if (FDCAN1_RxHeader.Identifier == CANID_SEEDLING_SET_ARM_POSITION) {
       switch(FDCAN1_RxData[0]) {
         case 0:
           printf("PICKUP\r\n");
@@ -164,13 +161,13 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
           }
           break;
         case 1:
-          printf("PUT INSIDE\r\n");
+          printf("PUT OUTSIDE\r\n");
           for(int arm_index=0; arm_index < 4; arm_index++ ) {
               pid_reset_setpoint(&PID_For_ARM_POS[arm_index], setpoint[1][arm_index]);
           }
           break;
         case 2:
-          printf("PUT OUTSIDE\r\n");
+          printf("PUT INSIDE\r\n");
           for(int arm_index=0; arm_index < 4; arm_index++ ) {
               pid_reset_setpoint(&PID_For_ARM_POS[arm_index], setpoint[2][arm_index]);
           }
@@ -207,7 +204,6 @@ static void ARM_Position_PID_Init(void) {
 
 	PID_For_ARM_POS = (struct PID *)malloc(4 * sizeof(struct PID));
 	if (PID_For_ARM_POS == NULL) {
-	    write_error_message(MEMORY_ERROR);
 			Error_Handler();
 	}
 
@@ -222,14 +218,13 @@ static void ARM_Position_PID_Init(void) {
 			 * -500 : integral_min
 			 * 500: integral_max
 			 */
-			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS, D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, setpoint[2][arm_index], -500, 500);
+			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS, D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, setpoint[0][arm_index], -500, 500);
 	}
 }
 
 static void ARM_Position_PID_Cycle(void) {
 	// Automatically set adc value to DMA, so don't need to read ADC
 	if (PID_For_ARM_POS == NULL) {
-	    write_error_message(NULL_POINTER_ERROR);
 			Error_Handler();
 	}
 
@@ -257,23 +252,8 @@ static void ARM_Position_PID_Cycle(void) {
 ////	 write new controller value with can
 	FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
 	if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, pid_controller_value) != HAL_OK) {
-	    write_error_message(FDCAN3_ERROR);
 	    Error_Handler();
 	}
-}
-
-// send error message to raspberrypi
-static void write_error_message(uint8_t error_code) {
-  /*
-   * LSB ----------------- MSB
-   * | micon ID | error_code |
-   */
-  uint8_t error_data = (error_code << 4) | ArmWheelController;
-  FDCAN1_TxHeader.Identifier = CANID_RUNTIME_ERROR;
-  FDCAN1_TxHeader.DataLength = FDCAN_DLC_BYTES_1;
-  if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &FDCAN1_TxHeader, &error_data) != HAL_OK) {
-          Error_Handler();
-  }
 }
 
 int _write(int file, char *ptr, int len)

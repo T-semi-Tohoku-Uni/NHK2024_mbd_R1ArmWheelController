@@ -13,4 +13,4 @@
 ../Core/Src/main.c:668:13:MX_TIM6_Init	3
 ../Core/Src/main.c:704:13:MX_DMA_Init	1
 ../Core/Src/main.c:723:13:MX_GPIO_Init	1
-../Core/Src/main.c:751:6:Error_Handler	1
+../Core/Src/main.c:762:6:Error_Handler	1

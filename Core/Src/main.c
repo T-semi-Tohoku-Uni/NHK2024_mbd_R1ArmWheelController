@@ -71,7 +71,7 @@ FDCAN_TxHeaderTypeDef FDCAN3_TxHeader;
 FDCAN_RxHeaderTypeDef FDCAN3_RxHeader;
 
 // For ADC continuous read
-//double arm_positions[4] = {0};
+double arm_positions[4] = {0};
 MotorState arm_motor[4];
 
 double ArmInitializeSwitchPosition[4] = {
@@ -100,7 +100,7 @@ struct PID *PID_For_ARM_POS = NULL;
  * -> 限界感度法がクソなのでいい感じにした
  */
 double P_GAIN_FOR_ARM_POS = 5;
-double P_GAIN_FOR_ARM_POS_SEQ[4] = {5.0, 5.0, 5.0, 5.0};
+double P_GAIN_FOR_ARM_POS_SEQ[4] = {7.0, 7.0, 7.0, 7.0};
 double I_GAIN_FOR_ARM_POS = 0;
 double D_GAIN_FOR_ARM_POS = 0.6;
 
@@ -115,17 +115,17 @@ double D_GAIN_FOR_ARM_POS = 0.6;
 int setpoint[3][4] = {
     // 苗の回収位置
     {
-        2590,
-        1250,
-        2590,
         285,
+        285,
+        285,
+        160,
     },
     // 外側をおく
     {
         2022,
         1250,
         2500,
-        2050
+        160,
     },
     // 内側をおく
     {
@@ -170,7 +170,7 @@ void ResetToHomePosition() {
       arm_motor[arm_index].vel = 0;
   }
   // それぞれのスイッチの変数を全てfalseにする
-  isPushedRestHomePositionButton[1] = false;
+//  isPushedRestHomePositionButton[1] = false;
   isPushedRestHomePositionButton[3] = false;
 
   /*
@@ -207,7 +207,6 @@ void ResetToHomePosition() {
   // 数秒待ってもならなかったら設置してるとみなす
   // タイマー回せば良いのかしら
 
-  // CANの有効化
   // PIDの制御を再開
   HAL_TIM_Base_Start_IT(&htim6);
 }
@@ -357,9 +356,10 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 	motorID = FDCAN3_RxHeader.Identifier - DJI_CANID_TX0 - 1;
 	// uint16_t 0 ~ 65535
 	rpm = rpm_to_signed(FDCAN3_RxData[2] << 8 | FDCAN3_RxData[3]);
-	float motor_vel = (float)(rpm / 60 / REDUCTIONRATIO * GEARNUM * RACKPITCH);
+	double motor_vel = (double)(rpm / 60 / REDUCTIONRATIO * GEARNUM * RACKPITCH);
 	arm_motor[motorID].vel = motor_vel;
-	arm_motor[motorID].pos += motor_vel * 0.001;
+	arm_motor[motorID].pos += (motor_vel * 0.001);
+//	arm_positions[motorID] = arm_positions[motorID] + motor_vel * 0.001;
 
 	printf("%f, %f, %f\r\n", 0.0, arm_motor[motorID].pos, 400.0);
 	// TODO : Add wheel controller
@@ -417,7 +417,7 @@ static void ARM_Position_PID_Cycle(void) {
 	// update controller output
 	for (int arm_index = 0; arm_index < 4; arm_index++ ) {
 
-			arm_motor[arm_index].vel = (uint16_t)(-int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_motor[arm_index].pos));
+			arm_motor[arm_index].vel = (uint16_t)(int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_motor[arm_index].pos));
 //			pid_controller_value[arm_index*2] = pid_for_arm_output >> 8;
 //			pid_controller_value[arm_index*2+1] = pid_for_arm_output & 0xFF;
 	}
@@ -478,12 +478,14 @@ int main(void)
 //	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 //	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);
 //  printf("start rest to home position\r\n");
-//  ResetToHomePosition();
+  ResetToHomePosition();
 //	printf("Complete Initialize\r\n");
 
 
 	// TODO: enable this func
 	// Start timer interrupt (1kHz)
+  // TODO delete
+  InitMotorState(3);
 	HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */

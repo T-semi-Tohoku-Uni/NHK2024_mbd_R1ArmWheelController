@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "pid.h"
 #include "R1CANIDList.h"
 #include "DJI_CANIDList.h"
@@ -32,12 +33,18 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct MotorState {
+  int16_t vel;
+  double pos;
+} MotorState;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define REDUCTIONRATIO 36
+#define GEARNUM 32
+#define RACKPITCH 3.14159265
+#define MOTOR_TO_EDGE_DISTANCE 21
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,15 +53,13 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc1;
-DMA_HandleTypeDef hdma_adc1;
-
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan3;
 
 UART_HandleTypeDef hlpuart1;
 
 TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim7;
 
 /* USER CODE BEGIN PV */
 
@@ -66,7 +71,22 @@ FDCAN_TxHeaderTypeDef FDCAN3_TxHeader;
 FDCAN_RxHeaderTypeDef FDCAN3_RxHeader;
 
 // For ADC continuous read
-uint16_t arm_positions[4] = {0};
+//double arm_positions[4] = {0};
+MotorState arm_motor[4];
+
+double ArmInitializeSwitchPosition[4] = {
+    310 - MOTOR_TO_EDGE_DISTANCE,
+    12.5 + MOTOR_TO_EDGE_DISTANCE,
+    12.5 + MOTOR_TO_EDGE_DISTANCE,
+    310 - MOTOR_TO_EDGE_DISTANCE,
+};
+// 全てのアーム位置を再初期化する際に使う変数たち
+bool isPushedRestHomePositionButton[4] = {
+    false,
+    false,
+    false,
+    false
+};
 
 // For ARM position PID
 struct PID *PID_For_ARM_POS = NULL;
@@ -79,9 +99,10 @@ struct PID *PID_For_ARM_POS = NULL;
  *
  * -> 限界感度法がクソなのでいい感じにした
  */
-double P_GAIN_FOR_ARM_POS = 4;
+double P_GAIN_FOR_ARM_POS = 5;
+double P_GAIN_FOR_ARM_POS_SEQ[4] = {5.0, 5.0, 5.0, 5.0};
 double I_GAIN_FOR_ARM_POS = 0;
-double D_GAIN_FOR_ARM_POS = 0.5;
+double D_GAIN_FOR_ARM_POS = 0.6;
 
 // setpoint for arm
 // TODO
@@ -92,20 +113,25 @@ double D_GAIN_FOR_ARM_POS = 0.5;
 //		1387,
 //};
 int setpoint[3][4] = {
+    // 苗の回収位置
     {
-        2640,
-        1550,
-        2480,
-        1387,
-    }, {
+        2590,
+        1250,
+        2590,
+        285,
+    },
+    // 外側をおく
+    {
         2022,
-        1550,
-        2480,
+        1250,
+        2500,
         2050
-    }, {
+    },
+    // 内側をおく
+    {
         2635,
-        2184,
-        1850,
+        2100,
+        1950,
         1382
     }
 };
@@ -115,28 +141,150 @@ int setpoint[3][4] = {
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
-static void MX_ADC1_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_FDCAN3_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_FDCAN1_Init(void);
+static void MX_TIM7_Init(void);
 /* USER CODE BEGIN PFP */
 static void ARM_Position_PID_Init(void);
 static void ARM_Position_PID_Cycle(void);
+
+// 原点調節用の関数
+static void InitMotorState(uint8_t motorID);
+static void setMotorVel();
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* --- アームの原点を取るための関数たち --- */
+void ResetToHomePosition() {
+  // 実行前の初期化
+  // PIDの制御を一旦止める
+  HAL_TIM_Base_Stop_IT(&htim6);
+  // MotorStateの初期化
+  for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+      arm_motor[arm_index].pos = 0;
+      arm_motor[arm_index].vel = 0;
+  }
+  // それぞれのスイッチの変数を全てfalseにする
+  isPushedRestHomePositionButton[1] = false;
+  isPushedRestHomePositionButton[3] = false;
+
+  /*
+     * CANID 0, 3はプラス方向
+     * CANID 1, 2はマイナス方向へ
+  */
+//  int16_t val_settings[4] = {
+//      0,
+//      0,
+//      0,
+//      -1000,
+//  };
+//  uint8_t motor_vel_value[8];
+//
+//  // update controller output
+//  for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+//      motor_vel_value[arm_index*2] = val_settings[arm_index] >> 8;
+//      motor_vel_value[arm_index*2+1] = val_settings[arm_index] & 0xFF;
+//  }
+
+  // モータ動かす
+  HAL_TIM_Base_Start_IT(&htim7);
+
+  // 全部がスイッチにタッチするまで待つ
+//  printf("wait... all switch pushed\r\n");
+  while (
+      !isPushedRestHomePositionButton[3]
+  ) {
+      // continue
+  }
+//  printf("finish  all switch pushed\r\n");
+  HAL_TIM_Base_Stop_IT(&htim7);
+
+  // 数秒待ってもならなかったら設置してるとみなす
+  // タイマー回せば良いのかしら
+
+  // CANの有効化
+  // PIDの制御を再開
+  HAL_TIM_Base_Start_IT(&htim6);
+}
+
+/*
+ * 原点調節用のスイッチの割り込み関数
+ */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == Arm1Switch_Pin)
+  {
+//      printf("[Initialize Position]: ARM 1\r\n");
+      InitMotorState(1); // motorStateを再初期化する
+      setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
+      isPushedRestHomePositionButton[1] = true;
+  }
+
+  if (GPIO_Pin == Arm3Switch_Pin)
+  {
+//      printf("[Initialize Position]: ARM 4\r\n");
+      InitMotorState(3); // motorStateを再初期化する
+      setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
+      isPushedRestHomePositionButton[3] = true;
+  }
+}
+
+/*
+ * CANIDがmotorIDのモータのarm_positions(アームの位置)情報を初期化する
+ */
+void InitMotorState(uint8_t motorID) {
+  arm_motor[motorID].vel = 0;
+  arm_motor[motorID].pos = ArmInitializeSwitchPosition[motorID];
+}
+
+/*
+ * 原点が押されるまでモーターを原点方向に回し続ける関数.
+ * 原点到着後はタイマーが止まるまでその場に居続ける
+ */
+void MoveToOriginAndHold(void) {
+//  int16_t vel_settings[4] = {0, 0, 0, 0};
+//
+  if (!isPushedRestHomePositionButton[1]) {
+      arm_motor[1].vel = 300;
+  }
+  if (!isPushedRestHomePositionButton[3]) {
+      arm_motor[3].vel = 300;
+  }
+  setMotorVel();
+}
+
+void setMotorVel() {
+    uint8_t motor_vel_value[8];
+
+    // update controller output
+    for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+        motor_vel_value[arm_index*2] = arm_motor[arm_index].vel >> 8;
+        motor_vel_value[arm_index*2+1] = arm_motor[arm_index].vel & 0xFF;
+    }
+
+    FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
+    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, motor_vel_value) != HAL_OK) {
+        Error_Handler();
+    }
+}
 
 // Set timer interrupt
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
 	// For arm position adc
 	if (htim == &htim6) {
+	    // TODO: enable this func to enable PID
 			ARM_Position_PID_Cycle();
 	}
-
+	// アームの原点調節をするときに使用する. それ以外はdisable
+	if (htim == &htim7) {
+	    MoveToOriginAndHold();
+	}
 }
 
 // Set Interrupt Handler for FDCAN1 (raspberrypi, other stm ..)
@@ -178,11 +326,25 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
   }
 }
 
+float rpm_to_signed(uint16_t angular_velocity) {
+  if (angular_velocity <= UINT16_MAX/2) {
+      return (float)(angular_velocity);
+  } else {
+      return (float)(angular_velocity - UINT16_MAX);
+  }
+}
+
+int to_mechanical_angle(uint16_t angle) {
+  return (int)((angle / 8191.0) * 360);
+}
+
 // Set Interrupt Handler For FDCAN3 (motor at wheel and arm)
 void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs) {
 	uint8_t FDCAN3_RxData[8];
+	float rpm;
+	uint8_t motorID;
+
 	// Error Handling
-//	printf("FIFO1 callback\r\n");
 	if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE) == RESET) return;
 	if (hfdcan != &hfdcan3) return;
 
@@ -191,6 +353,15 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 		Error_Handler();
 	}
 
+//	printf("%d\r\n", motorID);
+	motorID = FDCAN3_RxHeader.Identifier - DJI_CANID_TX0 - 1;
+	// uint16_t 0 ~ 65535
+	rpm = rpm_to_signed(FDCAN3_RxData[2] << 8 | FDCAN3_RxData[3]);
+	float motor_vel = (float)(rpm / 60 / REDUCTIONRATIO * GEARNUM * RACKPITCH);
+	arm_motor[motorID].vel = motor_vel;
+	arm_motor[motorID].pos += motor_vel * 0.001;
+
+	printf("%f, %f, %f\r\n", 0.0, arm_motor[motorID].pos, 400.0);
 	// TODO : Add wheel controller
 //	switch(FDCAN3_RxHeader.Identifier) {
 //		default:
@@ -218,7 +389,7 @@ static void ARM_Position_PID_Init(void) {
 			 * -500 : integral_min
 			 * 500: integral_max
 			 */
-			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS, D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, setpoint[0][arm_index], -500, 500);
+			pid_init(&PID_For_ARM_POS[arm_index], 1e-3, P_GAIN_FOR_ARM_POS_SEQ[arm_index], D_GAIN_FOR_ARM_POS, I_GAIN_FOR_ARM_POS, setpoint[0][arm_index], -500, 500);
 	}
 }
 
@@ -229,8 +400,10 @@ static void ARM_Position_PID_Cycle(void) {
 	}
 
 
-	uint8_t pid_controller_value[8];
+//	uint8_t pid_controller_value[8];
 
+//	printf("0, %d, 3000\r\n", arm_positions[1]);
+//	printf("0, %d, 3000\r\n", arm_positions[2]);
 //	printf("0, %d, %d, %d, %d, 3000\r\n", arm_positions[0], arm_positions[1], arm_positions[2], arm_positions[3]);
 //	printf("0, %d, 3000\r\n", arm_positions[2]);
 
@@ -244,16 +417,16 @@ static void ARM_Position_PID_Cycle(void) {
 	// update controller output
 	for (int arm_index = 0; arm_index < 4; arm_index++ ) {
 
-			uint16_t pid_for_arm_output = (uint16_t)(-int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_positions[arm_index]));
-			pid_controller_value[arm_index*2] = pid_for_arm_output >> 8;
-			pid_controller_value[arm_index*2+1] = pid_for_arm_output & 0xFF;
+			arm_motor[arm_index].vel = (uint16_t)(-int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_motor[arm_index].pos));
+//			pid_controller_value[arm_index*2] = pid_for_arm_output >> 8;
+//			pid_controller_value[arm_index*2+1] = pid_for_arm_output & 0xFF;
 	}
-
+	setMotorVel();
 ////	 write new controller value with can
-	FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
-	if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, pid_controller_value) != HAL_OK) {
-	    Error_Handler();
-	}
+//	FDCAN3_TxHeader.Identifier = DJI_CANID_TX0;
+//	if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &FDCAN3_TxHeader, pid_controller_value) != HAL_OK) {
+//	    Error_Handler();
+//	}
 }
 
 int _write(int file, char *ptr, int len)
@@ -292,21 +465,24 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_ADC1_Init();
   MX_LPUART1_UART_Init();
   MX_FDCAN3_Init();
   MX_TIM6_Init();
   MX_FDCAN1_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
+//  printf("arm position pid init\r\n");
   // Initialize PID library
   ARM_Position_PID_Init();
   // Start ADC and save at DMA
-	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
-	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);
+//	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+//	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);
+//  printf("start rest to home position\r\n");
+//  ResetToHomePosition();
+//	printf("Complete Initialize\r\n");
 
-	printf("Complete Initialize\r\n");
 
+	// TODO: enable this func
 	// Start timer interrupt (1kHz)
 	HAL_TIM_Base_Start_IT(&htim6);
 
@@ -367,101 +543,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief ADC1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC1_Init(void)
-{
-
-  /* USER CODE BEGIN ADC1_Init 0 */
-
-  /* USER CODE END ADC1_Init 0 */
-
-  ADC_MultiModeTypeDef multimode = {0};
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC1_Init 1 */
-
-  /* USER CODE END ADC1_Init 1 */
-
-  /** Common config
-  */
-  hadc1.Instance = ADC1;
-  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
-  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.GainCompensation = 0;
-  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.ContinuousConvMode = ENABLE;
-  hadc1.Init.NbrOfConversion = 4;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.DMAContinuousRequests = ENABLE;
-  hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  hadc1.Init.OversamplingMode = DISABLE;
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure the ADC multi-mode
-  */
-  multimode.Mode = ADC_MODE_INDEPENDENT;
-  if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
-  sConfig.Channel = ADC_CHANNEL_7;
-  sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_640CYCLES_5;
-  sConfig.SingleDiff = ADC_SINGLE_ENDED;
-  sConfig.OffsetNumber = ADC_OFFSET_NONE;
-  sConfig.Offset = 0;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
-  sConfig.Channel = ADC_CHANNEL_1;
-  sConfig.Rank = ADC_REGULAR_RANK_2;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
-  sConfig.Channel = ADC_CHANNEL_2;
-  sConfig.Rank = ADC_REGULAR_RANK_3;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure Regular Channel
-  */
-  sConfig.Channel = ADC_CHANNEL_6;
-  sConfig.Rank = ADC_REGULAR_RANK_4;
-  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ADC1_Init 2 */
-
-  /* USER CODE END ADC1_Init 2 */
-
 }
 
 /**
@@ -629,7 +710,7 @@ static void MX_LPUART1_UART_Init(void)
 
   /* USER CODE END LPUART1_Init 1 */
   hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 115200;
+  hlpuart1.Init.BaudRate = 2000000;
   hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
   hlpuart1.Init.StopBits = UART_STOPBITS_1;
   hlpuart1.Init.Parity = UART_PARITY_NONE;
@@ -699,19 +780,40 @@ static void MX_TIM6_Init(void)
 }
 
 /**
-  * Enable DMA controller clock
+  * @brief TIM7 Initialization Function
+  * @param None
+  * @retval None
   */
-static void MX_DMA_Init(void)
+static void MX_TIM7_Init(void)
 {
 
-  /* DMA controller clock enable */
-  __HAL_RCC_DMAMUX1_CLK_ENABLE();
-  __HAL_RCC_DMA1_CLK_ENABLE();
+  /* USER CODE BEGIN TIM7_Init 0 */
 
-  /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+  /* USER CODE END TIM7_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM7_Init 1 */
+
+  /* USER CODE END TIM7_Init 1 */
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 80;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = 9999;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim7, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM7_Init 2 */
+
+  /* USER CODE END TIM7_Init 2 */
 
 }
 
@@ -734,9 +836,15 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BoardLED_GPIO_Port, BoardLED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PA6 PA7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  /*Configure GPIO pins : PC0 PC1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Arm3Switch_Pin PA1 Arm1Switch_Pin PA7 */
+  GPIO_InitStruct.Pin = Arm3Switch_Pin|GPIO_PIN_1|Arm1Switch_Pin|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
@@ -746,6 +854,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(BoardLED_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -767,7 +885,6 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
-
   }
   /* USER CODE END Error_Handler_Debug */
 }

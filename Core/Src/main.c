@@ -60,6 +60,7 @@ UART_HandleTypeDef hlpuart1;
 
 TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim7;
+TIM_HandleTypeDef htim16;
 
 /* USER CODE BEGIN PV */
 
@@ -74,9 +75,27 @@ FDCAN_RxHeaderTypeDef FDCAN3_RxHeader;
 double arm_positions[4] = {0};
 MotorState arm_motor[4];
 
+// スイッチのチャタリング防止用変数
+bool isHolPushedFlagForPreventChattering[4] = {
+    false,
+    false,
+    false,
+    false
+};
+
+// チャタリング防止用のタイマー
+// 1MHzでタイマー回して1000になったらリセットする
+unsigned int holdTimer[4] = {
+    0,
+    0,
+    0,
+    0
+};
+
+// それぞれのスイッチのロボットからみた位置
 double ArmInitializeSwitchPosition[4] = {
-    310 - MOTOR_TO_EDGE_DISTANCE,
-    12.5 + MOTOR_TO_EDGE_DISTANCE,
+    -(310 - MOTOR_TO_EDGE_DISTANCE),
+    -(12.5 + MOTOR_TO_EDGE_DISTANCE),
     12.5 + MOTOR_TO_EDGE_DISTANCE,
     310 - MOTOR_TO_EDGE_DISTANCE,
 };
@@ -100,9 +119,9 @@ struct PID *PID_For_ARM_POS = NULL;
  * -> 限界感度法がクソなのでいい感じにした
  */
 double P_GAIN_FOR_ARM_POS = 5;
-double P_GAIN_FOR_ARM_POS_SEQ[4] = {7.0, 7.0, 7.0, 7.0};
+double P_GAIN_FOR_ARM_POS_SEQ[4] = {12.0, 12.0, 12.0, 12.0};
 double I_GAIN_FOR_ARM_POS = 0;
-double D_GAIN_FOR_ARM_POS = 0.6;
+double D_GAIN_FOR_ARM_POS = 1;
 
 // setpoint for arm
 // TODO
@@ -115,24 +134,24 @@ double D_GAIN_FOR_ARM_POS = 0.6;
 int setpoint[3][4] = {
     // 苗の回収位置
     {
+        -285,
+        -69.5,
+        69.5,
         285,
-        285,
-        285,
-        160,
     },
     // 外側をおく
     {
-        2022,
-        1250,
-        2500,
+        -160,
+        -50,
+        50,
         160,
     },
     // 内側をおく
     {
-        2635,
-        2100,
-        1950,
-        1382
+        -285,
+        -194.5,
+        194.5,
+        285
     }
 };
 
@@ -146,6 +165,7 @@ static void MX_FDCAN3_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_TIM7_Init(void);
+static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 static void ARM_Position_PID_Init(void);
 static void ARM_Position_PID_Cycle(void);
@@ -170,8 +190,9 @@ void ResetToHomePosition() {
       arm_motor[arm_index].vel = 0;
   }
   // それぞれのスイッチの変数を全てfalseにする
-//  isPushedRestHomePositionButton[1] = false;
-  isPushedRestHomePositionButton[3] = false;
+  for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+      isPushedRestHomePositionButton[arm_index] = false;
+  }
 
   /*
      * CANID 0, 3はプラス方向
@@ -191,23 +212,37 @@ void ResetToHomePosition() {
 //      motor_vel_value[arm_index*2+1] = val_settings[arm_index] & 0xFF;
 //  }
 
-  // モータ動かす
+  /*
+   * アームをリミットスイッチまで動かす
+   * スイッチが押されたら停止する
+   * タイマーの切り忘れがないように注意
+   */
   HAL_TIM_Base_Start_IT(&htim7);
 
   // 全部がスイッチにタッチするまで待つ
-//  printf("wait... all switch pushed\r\n");
+//  while (
+//      !isPushedRestHomePositionButton[0] ||
+//      !isPushedRestHomePositionButton[1] ||
+//      !isPushedRestHomePositionButton[2] ||
+//      !isPushedRestHomePositionButton[3]
+//  ) {
+//      // continue
+//  }
+  printf("while\r\n");
   while (
+      !isPushedRestHomePositionButton[0] ||
+      !isPushedRestHomePositionButton[1] ||
+      !isPushedRestHomePositionButton[2] ||
       !isPushedRestHomePositionButton[3]
   ) {
-      // continue
-  }
-//  printf("finish  all switch pushed\r\n");
-  HAL_TIM_Base_Stop_IT(&htim7);
 
-  // 数秒待ってもならなかったら設置してるとみなす
-  // タイマー回せば良いのかしら
+  }
+
+  printf("Complete\r\n");
 
   // PIDの制御を再開
+  // 原点初期化用のタイマーを停止して、PIDを再開する
+  HAL_TIM_Base_Stop_IT(&htim7);
   HAL_TIM_Base_Start_IT(&htim6);
 }
 
@@ -216,20 +251,39 @@ void ResetToHomePosition() {
  */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  if (GPIO_Pin == Arm1Switch_Pin)
+  if (GPIO_Pin == Arm0Switch_Pin && !isHolPushedFlagForPreventChattering[0])
+  {
+      InitMotorState(0); // motorStateを再初期化する
+      setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
+      isPushedRestHomePositionButton[0] = true;
+      isHolPushedFlagForPreventChattering[0] = true; // チャタリング防止用
+  }
+
+  if (GPIO_Pin == Arm1Switch_Pin && !isHolPushedFlagForPreventChattering[1])
   {
 //      printf("[Initialize Position]: ARM 1\r\n");
       InitMotorState(1); // motorStateを再初期化する
       setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
       isPushedRestHomePositionButton[1] = true;
+      isHolPushedFlagForPreventChattering[1] = true; // チャタリング防止用
   }
 
-  if (GPIO_Pin == Arm3Switch_Pin)
+  if (GPIO_Pin == Arm2Switch_Pin && !isHolPushedFlagForPreventChattering[2])
+  {
+//      printf("[Initialize Position]: ARM 4\r\n");
+      InitMotorState(2); // motorStateを再初期化する
+      setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
+      isPushedRestHomePositionButton[2] = true;
+      isHolPushedFlagForPreventChattering[2] = true; // チャタリング防止用
+  }
+
+  if (GPIO_Pin == Arm3Switch_Pin && !isHolPushedFlagForPreventChattering[3])
   {
 //      printf("[Initialize Position]: ARM 4\r\n");
       InitMotorState(3); // motorStateを再初期化する
       setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
       isPushedRestHomePositionButton[3] = true;
+      isHolPushedFlagForPreventChattering[3] = true; // チャタリング防止用
   }
 }
 
@@ -248,12 +302,19 @@ void InitMotorState(uint8_t motorID) {
 void MoveToOriginAndHold(void) {
 //  int16_t vel_settings[4] = {0, 0, 0, 0};
 //
+  if (!isPushedRestHomePositionButton[0]) {
+        arm_motor[0].vel = -500;
+  }
   if (!isPushedRestHomePositionButton[1]) {
-      arm_motor[1].vel = 300;
+      arm_motor[1].vel =  500;
+  }
+  if (!isPushedRestHomePositionButton[2]) {
+      arm_motor[2].vel = -500;
   }
   if (!isPushedRestHomePositionButton[3]) {
-      arm_motor[3].vel = 300;
+      arm_motor[3].vel = 500;
   }
+
   setMotorVel();
 }
 
@@ -283,6 +344,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 	// アームの原点調節をするときに使用する. それ以外はdisable
 	if (htim == &htim7) {
 	    MoveToOriginAndHold();
+	}
+
+	// チャタリング防止用. 100KHzで回している。10msなったら解除
+	if (htim == &htim16) {
+	    for (int arm_index = 0; arm_index < 4; arm_index++ ) {
+	        if (!isHolPushedFlagForPreventChattering[arm_index]) continue;
+	        holdTimer[arm_index]++;
+	        // 10ms立ったら再度初期化
+	        if (holdTimer[arm_index] == 1000) {
+	            holdTimer[arm_index] = 0;
+	            isHolPushedFlagForPreventChattering[arm_index] = false;
+	        }
+//	        printf("%d\r\n", isHolPushedFlagForPreventChattering[arm_index]);
+	    }
 	}
 }
 
@@ -361,7 +436,7 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 	arm_motor[motorID].pos += (motor_vel * 0.001);
 //	arm_positions[motorID] = arm_positions[motorID] + motor_vel * 0.001;
 
-	printf("%f, %f, %f\r\n", 0.0, arm_motor[motorID].pos, 400.0);
+//	printf("%f, %f, %f, %f\r\n", 0.0, arm_motor[1].pos, 12.5 , 2000.0);
 	// TODO : Add wheel controller
 //	switch(FDCAN3_RxHeader.Identifier) {
 //		default:
@@ -416,8 +491,8 @@ static void ARM_Position_PID_Cycle(void) {
 
 	// update controller output
 	for (int arm_index = 0; arm_index < 4; arm_index++ ) {
-
-			arm_motor[arm_index].vel = (uint16_t)(int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_motor[arm_index].pos));
+	    int32_t pid_val = int32_t_pid_compute(&PID_For_ARM_POS[arm_index], arm_motor[arm_index].pos);
+			arm_motor[arm_index].vel = pid_val;
 //			pid_controller_value[arm_index*2] = pid_for_arm_output >> 8;
 //			pid_controller_value[arm_index*2+1] = pid_for_arm_output & 0xFF;
 	}
@@ -470,14 +545,16 @@ int main(void)
   MX_TIM6_Init();
   MX_FDCAN1_Init();
   MX_TIM7_Init();
+  MX_TIM16_Init();
   /* USER CODE BEGIN 2 */
 //  printf("arm position pid init\r\n");
   // Initialize PID library
+  HAL_TIM_Base_Start_IT(&htim16);
   ARM_Position_PID_Init();
   // Start ADC and save at DMA
 //	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 //	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);
-//  printf("start rest to home position\r\n");
+  printf("start rest to home position\r\n");
   ResetToHomePosition();
 //	printf("Complete Initialize\r\n");
 
@@ -820,6 +897,38 @@ static void MX_TIM7_Init(void)
 }
 
 /**
+  * @brief TIM16 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM16_Init(void)
+{
+
+  /* USER CODE BEGIN TIM16_Init 0 */
+
+  /* USER CODE END TIM16_Init 0 */
+
+  /* USER CODE BEGIN TIM16_Init 1 */
+
+  /* USER CODE END TIM16_Init 1 */
+  htim16.Instance = TIM16;
+  htim16.Init.Prescaler = 80;
+  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim16.Init.Period = 9;
+  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim16.Init.RepetitionCounter = 0;
+  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim16) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM16_Init 2 */
+
+  /* USER CODE END TIM16_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -844,8 +953,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Arm3Switch_Pin PA1 Arm1Switch_Pin PA7 */
-  GPIO_InitStruct.Pin = Arm3Switch_Pin|GPIO_PIN_1|Arm1Switch_Pin|GPIO_PIN_7;
+  /*Configure GPIO pins : Arm3Switch_Pin Arm2Switch_Pin Arm1Switch_Pin Arm0Switch_Pin */
+  GPIO_InitStruct.Pin = Arm3Switch_Pin|Arm2Switch_Pin|Arm1Switch_Pin|Arm0Switch_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);

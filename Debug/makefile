@@ -63,7 +63,7 @@ main-build: NHK2024_mbd_R1ArmWheelController.elf secondary-outputs
 
 # Tool invocations
 NHK2024_mbd_R1ArmWheelController.elf NHK2024_mbd_R1ArmWheelController.map: $(OBJS) $(USER_OBJS) /Users/shibatakeigo/Development/t-semi/NHK2024_mbd_R1ArmWheelController/STM32G474RBTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "NHK2024_mbd_R1ArmWheelController.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/Users/shibatakeigo/Development/t-semi/NHK2024_mbd_R1ArmWheelController/STM32G474RBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="NHK2024_mbd_R1ArmWheelController.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+	arm-none-eabi-gcc -o "NHK2024_mbd_R1ArmWheelController.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/Users/shibatakeigo/Development/t-semi/NHK2024_mbd_R1ArmWheelController/STM32G474RBTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="NHK2024_mbd_R1ArmWheelController.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

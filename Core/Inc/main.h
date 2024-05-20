@@ -57,6 +57,18 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define Arm3Switch_Pin GPIO_PIN_0
+#define Arm3Switch_GPIO_Port GPIOA
+#define Arm3Switch_EXTI_IRQn EXTI0_IRQn
+#define Arm2Switch_Pin GPIO_PIN_1
+#define Arm2Switch_GPIO_Port GPIOA
+#define Arm2Switch_EXTI_IRQn EXTI1_IRQn
+#define Arm1Switch_Pin GPIO_PIN_6
+#define Arm1Switch_GPIO_Port GPIOA
+#define Arm1Switch_EXTI_IRQn EXTI9_5_IRQn
+#define Arm0Switch_Pin GPIO_PIN_7
+#define Arm0Switch_GPIO_Port GPIOA
+#define Arm0Switch_EXTI_IRQn EXTI9_5_IRQn
 #define BoardLED_Pin GPIO_PIN_2
 #define BoardLED_GPIO_Port GPIOD
 

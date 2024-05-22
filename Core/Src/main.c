@@ -110,6 +110,9 @@ bool isPushedRestHomePositionButton[4] = {
 };
 
 // For ARM position PID
+// Reset以下のプログラムを有効化にするかどうか. デフォルトはfalse, アームの制御を入れる時にtrueにする
+bool isProgramRun = false;
+
 struct PID *PID_For_ARM_POS = NULL;
 
 /*
@@ -374,6 +377,8 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
   }
 
   if (FDCAN1_RxHeader.Identifier == CANID_SEEDLING_SET_ARM_POSITION) {
+      // プログラムを有効化する
+      isProgramRun = true;
       switch(FDCAN1_RxData[0]) {
         case 0:
           printf("PICKUP\r\n");
@@ -559,9 +564,16 @@ int main(void)
   MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
 //  printf("arm position pid init\r\n");
+
   // Initialize PID library
   HAL_TIM_Base_Start_IT(&htim16);
   ARM_Position_PID_Init();
+
+  while(!isProgramRun) {
+      // アームの制御が入るまではこれ以降の処理をブロックする
+      // 初めにリミットスイッチで原点を取るが開始時に色々面倒だから
+  }
+
   // Start ADC and save at DMA
 //	HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
 //	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);

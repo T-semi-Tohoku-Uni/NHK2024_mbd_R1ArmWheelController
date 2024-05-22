@@ -109,6 +109,9 @@ bool isPushedRestHomePositionButton[4] = {
     false
 };
 
+// アーム位置を初期化する際に使用する関数. 3秒経ってもスイッチが押されないならリセットされたと判定する
+long long homePositionResetTimer = 0;
+
 // For ARM position PID
 // Reset以下のプログラムを有効化にするかどうか. デフォルトはfalse, アームの制御を入れる時にtrueにする
 bool isProgramRun = false;
@@ -200,6 +203,27 @@ void ResetToHomePosition() {
       isPushedRestHomePositionButton[arm_index] = false;
   }
 
+  if (!HAL_GPIO_ReadPin(Arm0Switch_GPIO_Port, Arm0Switch_Pin)) {
+      InitMotorState(0);
+      setMotorVel();
+      isPushedRestHomePositionButton[0] = true;
+  }
+  if (!HAL_GPIO_ReadPin(Arm1Switch_GPIO_Port, Arm1Switch_Pin)) {
+      InitMotorState(1);
+      setMotorVel();
+      isPushedRestHomePositionButton[1] = true;
+  }
+  if (!HAL_GPIO_ReadPin(Arm2Switch_GPIO_Port, Arm2Switch_Pin)) {
+      InitMotorState(2);
+      setMotorVel();
+      isPushedRestHomePositionButton[2] = true;
+  }
+  if (!HAL_GPIO_ReadPin(Arm3Switch_GPIO_Port, Arm3Switch_Pin)) {
+      InitMotorState(3);
+      setMotorVel();
+      isPushedRestHomePositionButton[3] = true;
+  }
+
   /*
      * CANID 0, 3はプラス方向
      * CANID 1, 2はマイナス方向へ
@@ -233,7 +257,6 @@ void ResetToHomePosition() {
       !isPushedRestHomePositionButton[2] ||
       !isPushedRestHomePositionButton[3]
   ) {
-
   }
 
   printf("Complete\r\n");
@@ -345,6 +368,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 	}
 	// アームの原点調節をするときに使用する. それ以外はdisable
 	if (htim == &htim7) {
+	    homePositionResetTimer += 1;
+	    printf("%d\r\n", homePositionResetTimer);
 	    MoveToOriginAndHold();
 	}
 
@@ -400,8 +425,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
           break;
         case 3:
           // TODO: disable FDCAN3 and reset program
-          printf("RESET\r\n");
-          HAL_NVIC_DisableIRQ(FDCAN3_IT1_IRQn);
+          __disable_irq();
           break;
         default:
           break; // TODO : send RuntimeError to raspbeerypi
@@ -569,6 +593,7 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim16);
   ARM_Position_PID_Init();
 
+  printf("iwdg restart\r\n");
   while(!isProgramRun) {
       // アームの制御が入るまではこれ以降の処理をブロックする
       // 初めにリミットスイッチで原点を取るが開始時に色々面倒だから

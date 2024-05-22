@@ -56,6 +56,8 @@ typedef struct MotorState {
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan3;
 
+IWDG_HandleTypeDef hiwdg;
+
 UART_HandleTypeDef hlpuart1;
 
 TIM_HandleTypeDef htim6;
@@ -166,6 +168,7 @@ static void MX_TIM6_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_TIM7_Init(void);
 static void MX_TIM16_Init(void);
+static void MX_IWDG_Init(void);
 /* USER CODE BEGIN PFP */
 static void ARM_Position_PID_Init(void);
 static void ARM_Position_PID_Cycle(void);
@@ -220,14 +223,6 @@ void ResetToHomePosition() {
   HAL_TIM_Base_Start_IT(&htim7);
 
   // 全部がスイッチにタッチするまで待つ
-//  while (
-//      !isPushedRestHomePositionButton[0] ||
-//      !isPushedRestHomePositionButton[1] ||
-//      !isPushedRestHomePositionButton[2] ||
-//      !isPushedRestHomePositionButton[3]
-//  ) {
-//      // continue
-//  }
   printf("while\r\n");
   while (
       !isPushedRestHomePositionButton[0] ||
@@ -253,6 +248,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   if (GPIO_Pin == Arm0Switch_Pin && !isHolPushedFlagForPreventChattering[0])
   {
+      printf("Arm 0 initialized\r\n");
       InitMotorState(0); // motorStateを再初期化する
       setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
       isPushedRestHomePositionButton[0] = true;
@@ -262,6 +258,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (GPIO_Pin == Arm1Switch_Pin && !isHolPushedFlagForPreventChattering[1])
   {
 //      printf("[Initialize Position]: ARM 1\r\n");
+      printf("Arm 1 initialized\r\n");
       InitMotorState(1); // motorStateを再初期化する
       setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
       isPushedRestHomePositionButton[1] = true;
@@ -271,6 +268,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (GPIO_Pin == Arm2Switch_Pin && !isHolPushedFlagForPreventChattering[2])
   {
 //      printf("[Initialize Position]: ARM 4\r\n");
+      printf("Arm 2 initialized\r\n");
       InitMotorState(2); // motorStateを再初期化する
       setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
       isPushedRestHomePositionButton[2] = true;
@@ -280,6 +278,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (GPIO_Pin == Arm3Switch_Pin && !isHolPushedFlagForPreventChattering[3])
   {
 //      printf("[Initialize Position]: ARM 4\r\n");
+      printf("Arm 3 initialized\r\n");
       InitMotorState(3); // motorStateを再初期化する
       setMotorVel(); // 再初期化したモーターの速度を0にする（InitMotorStateで変更したvelがCANに流されて反映される）
       isPushedRestHomePositionButton[3] = true;
@@ -394,6 +393,11 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
               pid_reset_setpoint(&PID_For_ARM_POS[arm_index], setpoint[2][arm_index]);
           }
           break;
+        case 3:
+          // TODO: disable FDCAN3 and reset program
+          printf("RESET\r\n");
+          HAL_NVIC_DisableIRQ(FDCAN3_IT1_IRQn);
+          break;
         default:
           break; // TODO : send RuntimeError to raspbeerypi
       }
@@ -426,6 +430,12 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo1ITs)
 		printf("FDCAN3 error %" PRIu32 "\r\n", hfdcan->ErrorCode); // TODO : send this error to raspberrypi ON FDCAN1
 		Error_Handler();
 	}
+
+	// Reload IWDG
+	if (HAL_IWDG_Refresh(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
 //	printf("%d\r\n", motorID);
 	motorID = FDCAN3_RxHeader.Identifier - DJI_CANID_TX0 - 1;
@@ -546,6 +556,7 @@ int main(void)
   MX_FDCAN1_Init();
   MX_TIM7_Init();
   MX_TIM16_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
 //  printf("arm position pid init\r\n");
   // Initialize PID library
@@ -556,14 +567,13 @@ int main(void)
 //	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&arm_positions, 4);
   printf("start rest to home position\r\n");
   ResetToHomePosition();
-//	printf("Complete Initialize\r\n");
+	printf("Complete Initialize\r\n");
 
 
 	// TODO: enable this func
 	// Start timer interrupt (1kHz)
   // TODO delete
-  InitMotorState(3);
-	HAL_TIM_Base_Start_IT(&htim6);
+//	HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */
 
@@ -594,9 +604,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
@@ -770,6 +781,35 @@ static void MX_FDCAN3_Init(void)
 		Error_Handler();
 	}
   /* USER CODE END FDCAN3_Init 2 */
+
+}
+
+/**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_32;
+  hiwdg.Init.Window = 3000;
+  hiwdg.Init.Reload = 9;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
 
 }
 
